@@ -1,6 +1,14 @@
 # 实现进度
 
-更新时间：2026-10-15。当前以 **Linux 真实 Electron 环境**完成共享 API、业务逻辑、页面和播放器验证；Windows/macOS 不阻塞开发，不使用 Wine 作为运行/验收依赖。不对外发布。
+更新时间：2026-10-18。当前以 **Linux 真实 Electron 环境**完成共享 API、业务逻辑、页面和播放器验证；新增 macOS arm64 本地构建与有限真机验证，范围见下文。Windows/macOS 不阻塞共享功能开发，不使用 Wine 作为运行/验收依赖。
+
+## macOS arm64 本地验证（2026-10-18）
+
+- verified：macOS 27.0.1 / Apple Silicon，140 项离线单测、typecheck/build、未签名 arm64 App/DMG 构建、实际打包 App 启动、设置写回与 renderer 隔离检查通过。所有运行使用独立临时 profile，未导入研究凭据。
+- verified：现有 Electron UI、业务、965 首收藏回归在该 Mac 通过，音频及账号均为合成夹具；不能据此宣称真实华为音源播放或私人音乐库验收完成。
+- verified（图标修复）：用户初步试用反馈基本功能未见异常，并提供菜单栏图标异常截图。原 `capturePage` 生成方式将浏览器滚动条固化进 App/托盘 PNG；已改用 SVG → Canvas 直接栅格化、透明背景，并为 macOS 提供 18pt 单色 template 与 1×/2× 位图。尺寸、透明度及原生 Tray 布局检查通过；扩展屏真实菜单栏截图确认音符显示完整。内屏被菜单栏工具折叠，未改动其设置。
+- verified（烟测修复）：原 `test:electron` 统一要求应用菜单为 null，与 macOS 最小角色菜单冲突。现按平台验证：macOS 只保留 app/edit/window 角色，Windows/Linux 继续要求无应用菜单和窗口内菜单栏。修正后完整 macOS 烟测与代理回归通过，覆盖合成 MP3/FLAC 播放、seek、ended、单 Audio、safeStorage 合成会话加密/解密/清理、导航/权限限制及媒体 allowlist。
+- pending：真实账号 MP3/FLAC 全曲、重启恢复、物理媒体键、睡眠唤醒，以及 macOS x64；未逐项取得证据的能力仍待验收。
 
 ## M0–M6
 

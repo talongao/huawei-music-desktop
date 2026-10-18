@@ -127,12 +127,18 @@ try {
   assert.equal(boundary.hasGenericInvoke, false, 'preload exposed a generic IPC entry point');
   assert.equal(boundary.nodeProcess, 'undefined');
   assert.equal(boundary.requireType, 'undefined');
-  // The default Electron menu (File/Edit/View/Window) must not appear in the product UI.
-  const menuState = await app.evaluate(({ Menu, BrowserWindow }) => ({
-    applicationMenuRemoved: Menu.getApplicationMenu() === null,
-    menuBarVisible: BrowserWindow.getAllWindows()[0].isMenuBarVisible(),
-  }));
-  assert.deepEqual(menuState, { applicationMenuRemoved: true, menuBarVisible: false }, JSON.stringify(menuState));
+  // macOS keeps the minimal native roles for Cmd+Q / copy / paste; Windows/Linux
+  // have no application menu or in-window menu bar. Never accept the default View menu.
+  const menuState = await app.evaluate(({ Menu }) => {
+    const menu = Menu.getApplicationMenu();
+    return { applicationMenuRemoved: menu === null, roles: menu?.items.map(item => item.role?.toLowerCase()) ?? [] };
+  });
+  assert.deepEqual(menuState, process.platform === 'darwin'
+    ? { applicationMenuRemoved: false, roles: ['appmenu', 'editmenu', 'windowmenu'] }
+    : { applicationMenuRemoved: true, roles: [] }, JSON.stringify(menuState));
+  if (process.platform !== 'darwin') {
+    assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMenuBarVisible()), false);
+  }
   const rendererOrigin = new URL(await window.url()).protocol;
   assert.equal(rendererOrigin, 'file:');
   const trustedUrl = await window.url();

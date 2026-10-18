@@ -1,8 +1,9 @@
 // Draws app + tray icons from the open-source Lucide "Music" glyph (ISC).
-// Run with: xvfb-run -a ./node_modules/.bin/electron --no-sandbox scripts/make-icon.mjs
-// Outputs: build/icon.png (512, used by electron-builder), build/tray.png (32) and
-// src/main/icons.ts (base64 tray bitmap embedded in the app).
-import { app, BrowserWindow } from 'electron';
+// Run with: ./node_modules/.bin/electron scripts/make-icon.mjs (xvfb-run -a on headless Linux).
+// Outputs: build/icon.png (512), build/tray.png (32), macOS template PNGs (18/36),
+// and src/main/icons.ts (base64 tray bitmaps embedded in the app).
+import { app, BrowserWindow, nativeImage } from 'electron';
+import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -18,60 +19,89 @@ function iconNodes(name) {
   return new Function(`return ${match[1]}`)();
 }
 
-function render(nodes, size) {
+function render(nodes, size, template = false) {
   const shape = nodes.map(([tag, attrs]) => {
     const attributes = Object.entries(attrs).filter(([key]) => key !== 'key')
       .map(([key, value]) => `${key}="${value}"`).join(' ');
     return `<${tag} ${attributes}/>`;
   }).join('');
+  if (template) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24">
+      <g fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${shape}</g>
+    </svg>`;
+  }
   // 24x24 glyph scaled into a rounded brand square.
   const scale = (size * 0.58) / 24;
   const offset = (size - 24 * scale) / 2;
-  return `<!doctype html><meta charset="utf-8"><body style="margin:0;background:transparent">
-    <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
       <rect width="${size}" height="${size}" rx="${size * 0.22}" ry="${size * 0.22}" fill="#1b4037"/>
       <g transform="translate(${offset} ${offset}) scale(${scale})" fill="none" stroke="#f2fbf0"
          stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${shape}</g>
-    </svg></body>`;
+    </svg>`;
 }
 
-// Both sizes are rendered side by side in one window: shrinking a real window below the
-// 512px layout makes Chromium stop producing frames here, so the small icon is captured
-// from its own rect instead.
-async function captureAll(nodes, sizes) {
-  const gap = 24;
-  const canvas = sizes.reduce((sum, size) => sum + size + gap, 0);
-  const height = Math.max(...sizes);
-  const window = new BrowserWindow({ width: canvas, height, frame: false, useContentSize: true });
-  const offsets = [];
-  let x = gap;
-  for (const size of sizes) { offsets.push({ x, y: 0, width: size, height: size }); x += size + gap; }
-  const body = offsets.map((rect, index) => `<div style="position:absolute;left:${rect.x}px;top:0">${render(nodes, sizes[index])}</div>`).join('');
+// Rasterize the SVG itself, not a browser viewport. capturePage also captures scrollbars
+// and uses the display scale, which previously baked scrollbars into both shipped icons.
+async function captureAll(nodes, specs) {
+  const window = new BrowserWindow({
+    show: false,
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+  });
   try {
-    await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><meta charset="utf-8"><body style="margin:0;background:transparent">${body}</body>`)}`);
-    await new Promise(resolve => setTimeout(resolve, 250));
-    const shots = [];
-    for (const rect of offsets) {
-      const png = (await window.webContents.capturePage(rect)).toPNG();
-      if (!png.length) throw new Error(`icon capture at ${rect.width} produced no pixels`);
-      shots.push(png);
-    }
-    return shots;
+    await window.loadURL('data:text/html;charset=utf-8,<!doctype html><meta charset="utf-8">');
+    const images = specs.map(spec => ({ size: spec.size, svg: render(nodes, spec.size, spec.template) }));
+    const encoded = await window.webContents.executeJavaScript(`Promise.all(${JSON.stringify(images)}.map(async ({ size, svg }) => {
+      const image = new Image();
+      image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      canvas.getContext('2d').drawImage(image, 0, 0, size, size);
+      return canvas.toDataURL('image/png').split(',')[1];
+    }))`);
+    return encoded.map((value, index) => {
+      const png = Buffer.from(value, 'base64');
+      const image = nativeImage.createFromBuffer(png, { scaleFactor: 1 });
+      const size = specs[index].size;
+      assert.deepEqual(image.getSize(), { width: size, height: size });
+      const pixels = image.toBitmap();
+      for (const pixel of [0, size - 1, size * (size - 1), size * size - 1]) {
+        assert.equal(pixels[pixel * 4 + 3], 0, 'icon corners must stay transparent');
+      }
+      if (specs[index].template) {
+        assert.ok(pixels.some((value, offset) => offset % 4 === 3 && value > 0), 'empty template icon');
+        for (let offset = 0; offset < pixels.length; offset += 4) {
+          assert.equal(pixels[offset] | pixels[offset + 1] | pixels[offset + 2], 0, 'template icon must be black with transparency');
+        }
+      }
+      return png;
+    });
   } finally { if (!window.isDestroyed()) window.destroy(); }
 }
 
 async function main() {
-  const [large, tray] = await captureAll(iconNodes('music'), [512, 32]);
+  const specs = [
+    { name: 'icon.png', size: 512 },
+    { name: 'tray.png', size: 32 },
+    { name: 'trayTemplate.png', size: 18, template: true },
+    { name: 'trayTemplate@2x.png', size: 36, template: true },
+  ];
+  const [large, tray, template, template2x] = await captureAll(iconNodes('music'), specs);
   await mkdir(join(root, 'build'), { recursive: true });
-  await writeFile(join(root, 'build', 'icon.png'), large);
-  await writeFile(join(root, 'build', 'tray.png'), tray);
+  for (const [index, png] of [large, tray, template, template2x].entries()) {
+    await writeFile(join(root, 'build', specs[index].name), png);
+  }
   await writeFile(join(root, 'src/main/icons.ts'),
     '// Generated by scripts/make-icon.mjs from the Lucide "Music" glyph (ISC). Do not edit by hand.\n'
-    + `export const TRAY_ICON_PNG_BASE64 = '${tray.toString('base64')}';\n`);
-  process.stdout.write(`icon ok large=${large.length} tray=${tray.length}\n`);
+    + `export const TRAY_ICON_PNG_BASE64 = '${tray.toString('base64')}';\n`
+    + `export const TRAY_MAC_TEMPLATE_1X_PNG_BASE64 = '${template.toString('base64')}';\n`
+    + `export const TRAY_MAC_TEMPLATE_2X_PNG_BASE64 = '${template2x.toString('base64')}';\n`);
+  process.stdout.write(`icon ok large=${large.length} tray=${tray.length} macTemplate=${template.length}/${template2x.length}\n`);
 }
 
 const guard = setTimeout(() => { process.stderr.write('icon generation timed out\n'); app.exit(1); }, 30_000);
+// Closing the hidden rasterization window must not quit before the output writes finish.
+app.on('window-all-closed', () => {});
 app.whenReady().then(main).then(
   () => { clearTimeout(guard); setTimeout(() => app.exit(0), 150); },
   error => { clearTimeout(guard); process.stderr.write(`icon generation failed: ${error?.message ?? error}\n`); app.exit(1); },

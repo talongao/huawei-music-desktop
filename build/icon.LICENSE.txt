@@ -1,4 +1,4 @@
-App icon artwork is derived from the Lucide icon set (icon "music").
+App and tray icon artwork is derived from the Lucide icon set (icon "music").
 
 ISC License
 
