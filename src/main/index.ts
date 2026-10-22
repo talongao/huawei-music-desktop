@@ -7,7 +7,7 @@ import { createAuthManagerLifecycle } from './auth-manager-lifecycle.mjs';
 import { applyNodeProxy, electronBypassRules, proxyConfigurationProblem, proxyRules, readProxySettings } from './proxy.mjs';
 import { shouldBlockMediaRequest } from '../safe-media-url.mjs';
 import { loadSettings } from './storage';
-import { TRAY_ICON_PNG_BASE64 } from './icons';
+import { TRAY_ICON_PNG_BASE64, TRAY_ICON_TEMPLATE_PNG_BASE64, TRAY_ICON_TEMPLATE_2X_PNG_BASE64 } from './icons';
 import { APP_DISPLAY_NAME } from '../shared/app-name.mjs';
 import type { AppSettings } from '../shared/types';
 
@@ -83,7 +83,14 @@ function showMainWindow(): void {
 
 function createTray(): void {
   try {
-    const image = nativeImage.createFromDataURL(`data:image/png;base64,${TRAY_ICON_PNG_BASE64}`);
+    const image = process.platform === 'darwin'
+      ? nativeImage.createEmpty()
+      : nativeImage.createFromDataURL(`data:image/png;base64,${TRAY_ICON_PNG_BASE64}`);
+    if (process.platform === 'darwin') {
+      image.addRepresentation({ scaleFactor: 1, buffer: Buffer.from(TRAY_ICON_TEMPLATE_PNG_BASE64, 'base64') });
+      image.addRepresentation({ scaleFactor: 2, buffer: Buffer.from(TRAY_ICON_TEMPLATE_2X_PNG_BASE64, 'base64') });
+      image.setTemplateImage(true);
+    }
     tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
     tray.setToolTip(APP_DISPLAY_NAME);
     tray.setContextMenu(Menu.buildFromTemplate([
